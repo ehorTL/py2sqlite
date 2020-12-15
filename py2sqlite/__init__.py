@@ -1,2 +1,2 @@
-from .py2sql import *
-from .util import *
+from . import py2sql
+from . import util

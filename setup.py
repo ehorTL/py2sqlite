@@ -4,9 +4,9 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name='py2sqlite',
+    name='py2sqlite-ehortl',
     packages=['py2sqlite'],
-    version='0.0.1',
+    version='0.0.3',
     license='mit',
     description='Package to work with SQLite',
     author='Yaroslav Haidai, Yehor Polishchuk',
@@ -18,8 +18,6 @@ setuptools.setup(
         'Intended Audience :: Developers',
         'Topic :: Software Development :: Build Tools',
         'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3',
-        'Programming Language:: Python:: 3.8',
-        'Topic:: Database'
+        'Programming Language :: Python :: 3'
     ],
 )

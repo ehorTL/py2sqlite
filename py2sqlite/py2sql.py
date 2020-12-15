@@ -14,8 +14,8 @@ import builtins
 import sys
 import logging
 
-from util import *
-from demo_classes import *
+from .util import *
+from .demo_classes import *
 
 
 class Py2SQL:
@@ -32,7 +32,8 @@ class Py2SQL:
         :param log_file: absolute path with file name of file for logging to
         :return: logger instance from 'logging' module
         """
-        logging.basicConfig(level=logging.DEBUG, filename=log_file, filemode="a")
+        logging.basicConfig(level=logging.DEBUG,
+                            filename=log_file, filemode="a")
         logger = logging.getLogger("main_logger")
         logger.addFilter(lambda r: bool(logs_enabled))
         return logger
@@ -120,7 +121,8 @@ class Py2SQL:
         :return: size of table ib Mb
         """
         if not type(table_name) == str:
-            raise ValueError("str type expected as table_name. Got " + str(type(table_name)))
+            raise ValueError(
+                "str type expected as table_name. Got " + str(type(table_name)))
         q = "SELECT * FROM {}".format(table_name)
         try:
             self.cursor.execute(q)
@@ -128,7 +130,8 @@ class Py2SQL:
             raise Exception('No table' + table_name + ' found')
         rows = self.cursor.fetchall()
 
-        col_names = list(map(lambda descr_tuple: descr_tuple[0], self.cursor.description))
+        col_names = list(
+            map(lambda descr_tuple: descr_tuple[0], self.cursor.description))
         int_size = 8
         text_charsize = 2
         bytes_size = 0
@@ -158,44 +161,113 @@ class Py2SQL:
         :return: id of object instance that was saved
         """
         table_name = Py2SQL.__get_object_table_name(obj)
+        # print('saving', obj, 'to', table_name, 'id:', id(obj))
 
         if not self.__table_exists(table_name):
-            self.save_class(type(obj))
+            self.__create_table(type(obj))
+        else:
+            self.__update_table(type(obj))
 
         if not Py2SQL.__is_of_primitive_type(obj):  # object
+            values = []
             self.__add_object_attrs_columns(obj, table_name)
+            columns = self.__get_object_bound_columns(table_name).split(', ')
+            for col in columns[:]:
+                if not Py2SQL.__has_attr_for_column(obj, col):
+                    columns.remove(col)
+                    continue
 
-            values = [id(obj)]
-            for attr_value in obj.__dict__.values():
+                if col == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME:
+                    values.append(id(obj))
+                    continue
+
+                attr_value = Py2SQL.__get_attr_for_column(obj, col)
+                if isclass(attr_value):
+                    continue
                 values.append(self.__get_sqlite_repr(attr_value))
         else:
+            columns = self.__get_object_bound_columns(table_name).split(', ')
             values = (id(obj), self.__get_sqlite_repr(obj))
-
-        columns = self.__get_object_bound_columns(table_name)
 
         obj_pk = self.__get_pk_if_exists(obj)
         if obj_pk:
             query = 'UPDATE {} SET {} WHERE {} = ?'.format(
                 table_name,
-                ', '.join(['{} = ?'.format(c) for c in columns.split(', ')]),
+                ', '.join(['{} = ?'.format(c) for c in columns]),
                 PY2SQL_COLUMN_ID_NAME
             )
             params = (*values, obj_pk)
             # print(query, params)
             self.cursor.execute(query, params)
+            self.connection.commit()
             return obj_pk
 
         query = 'INSERT INTO {}({}) VALUES ({});'.format(
             table_name,
-            columns,
+            ', '.join(columns),
             ('?,' * len(values))[:-1]
         )
         # print(query, values)
 
-        self.cursor.execute(query, values)
-        self.connection.commit()
+        try:
+            self.cursor.execute(query, values)
+        except sqlite3.OperationalError:
+            self.cursor.execute(
+                'ALTER TABLE {} ADD COLUMN {} TEXT'.format(
+                    table_name, PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME)
+            )
+            columns = self.__get_object_bound_columns(table_name)
+            query = 'INSERT INTO {}({}) VALUES ({});'.format(
+                table_name,
+                columns,
+                ('?,' * len(values))[:-1]
+            )
+            self.cursor.execute(query, values)
 
+        self.connection.commit()
         return self.__get_last_inserted_id()
+
+    @staticmethod
+    def __get_attr_for_column(obj, column_name):
+        """
+        Retrieve attribute of an object corresponding to the given column name
+
+        :param obj: object to get attribute of
+        :param column_name: column name corresponding to desired attribute
+        :return: attribute of an object corresponding to the given column name
+        """
+        if column_name == PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME and Py2SQL.__is_of_primitive_type(obj):
+            return str(obj)
+        return getattr(obj, Py2SQL.__object_column_name_to_attr_name(column_name))
+
+    @staticmethod
+    def __has_attr_for_column(obj, column_name):
+        """
+        Check if object still has attribute corresponding to given column name
+
+        :param obj: object to check for
+        :param column_name: column name to check for
+        :return: True if object has attribute corresponding to given column name, False otherwise
+        """
+        if column_name == PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME and Py2SQL.__is_of_primitive_type(obj):
+            return True
+        if column_name == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME:
+            return True
+        if isclass(getattr(obj, Py2SQL.__object_column_name_to_attr_name(column_name), type)):
+            return False
+        return hasattr(obj, Py2SQL.__object_column_name_to_attr_name(column_name))
+
+    @staticmethod
+    def __object_column_name_to_attr_name(column_name):
+        """
+        Retrieve name of object's attribute corresponding to given column name
+
+        :param column_name: column name to get attribute name for
+        :return: name of object's attribute corresponding to given column name
+        """
+        attr_name = column_name.replace(PY2SQL_SEPARATOR, '').replace(PY2SQL_OBJECT_ATTR_PREFIX, '') \
+            .replace(PY2SQL_OBJECT_METHOD_PREFIX, '')
+        return attr_name
 
     def __get_pk_if_exists(self, obj):
         """
@@ -227,7 +299,7 @@ class Py2SQL:
         return self.cursor.execute('SELECT last_insert_rowid()').fetchone()[0]
 
     @staticmethod
-    def __get_object_column_name(attr_name: str):
+    def __get_object_column_name(attr_name: str, attr_value):
         """
         Retrieve name of the column responsible for storing given object instance attribute
 
@@ -235,6 +307,8 @@ class Py2SQL:
         :param attr_name: name of the object instance attribute to get the column name
         :return: name of the column responsible for storing given attribute
         """
+        if isfunction(attr_value) or ismethod(attr_value):
+            return PY2SQL_OBJECT_METHOD_PREFIX + PY2SQL_SEPARATOR + attr_name
         return PY2SQL_OBJECT_ATTR_PREFIX + PY2SQL_SEPARATOR + attr_name
 
     @staticmethod
@@ -248,7 +322,7 @@ class Py2SQL:
         :rtype: str
         :return: name of the column responsible for storing given attribute
         """
-        if isfunction(attr_value):
+        if isfunction(attr_value) or ismethod(attr_value):
             return PY2SQL_CLASS_METHOD_PREFIX + PY2SQL_SEPARATOR + attr_name
         return PY2SQL_CLASS_ATTR_PREFIX + PY2SQL_SEPARATOR + attr_name
 
@@ -264,7 +338,7 @@ class Py2SQL:
         :return: association reference string
         """
         return PY2SQL_ASSOCIATION_REFERENCE_PREFIX + PY2SQL_SEPARATOR + Py2SQL.__get_object_table_name(obj) + \
-               PY2SQL_SEPARATOR + str(ref_id)
+            PY2SQL_SEPARATOR + str(ref_id)
 
     @staticmethod
     def __get_base_class_table_reference_name(cls) -> str:
@@ -305,17 +379,22 @@ class Py2SQL:
         if obj is None:
             result = None
         elif type(obj) == array:
-            result = '{}("{}", {})'.format(type(obj).__name__, obj.typecode, list(obj))
+            result = '{}("{}", {})'.format(
+                type(obj).__name__, obj.typecode, list(obj))
         elif type(obj) == frozenset:
             result = str(obj)
         elif type(obj) == str:
             result = '{}("{}")'.format(type(obj).__name__, obj)
         elif Py2SQL.__is_of_primitive_type(obj):
             result = '{}({})'.format(type(obj).__name__, obj)
-        elif isfunction(obj):
+        elif isfunction(obj) or ismethod(obj):
             result = getsource(obj)
         else:  # object
-            result = Py2SQL.__get_association_reference(obj, self.save_object(obj))
+            if obj.__dict__:
+                result = Py2SQL.__get_association_reference(
+                    obj, self.save_object(obj))
+            else:
+                result = str(obj)
 
         if result is not None:
             return result.replace("'", '"')
@@ -330,7 +409,7 @@ class Py2SQL:
         :rtype: bool
         :return: True if object is of primitive type, False otherwise
         """
-        return Py2SQL.__is_primitive_type(type(obj))
+        return Py2SQL.__is_primitive_type(type(obj)) or not hasattr(obj, '__dict__')
 
     @staticmethod
     def __is_primitive_type(cls):
@@ -342,7 +421,7 @@ class Py2SQL:
         :return: True if class is primitive type, False otherwise
         """
 
-        return cls in (int, float, str, dict, tuple, list, set, frozenset, array)
+        return cls in (int, float, str, bool, dict, tuple, list, set, frozenset, array) or isbuiltin(cls)
 
     @staticmethod
     def __get_object_table_name(obj) -> str:
@@ -444,12 +523,14 @@ class Py2SQL:
         :param table_name: name of the table to add columns into
         :return: None
         """
-        for attr_name in obj.__dict__:
+        for attr_name, attr_value in obj.__dict__.items():
+            if isclass(attr_value):
+                continue
             try:
                 self.cursor.execute(
                     'ALTER TABLE {} ADD COLUMN {} TEXT'.format(
                         table_name,
-                        Py2SQL.__get_object_column_name(attr_name)
+                        Py2SQL.__get_object_column_name(attr_name, attr_value)
                     )
                 )
             except sqlite3.OperationalError:  # column already exists
@@ -464,8 +545,7 @@ class Py2SQL:
         :param cls_obj:
         :return: list of two-element tuples containing data field name and value respectively
         """
-        return [(k, v) for k, v in cls_obj.__dict__.items() if (not Py2SQL.__is_magic_attr(k) or isfunction(v)) and
-                PY2SQL_ID_NAME != k]
+        return [(k, v) for k, v in cls_obj.__dict__.items() if not Py2SQL.__is_magic_attr(k) and PY2SQL_ID_NAME != k]
 
     def __table_is_empty(self, table_name) -> bool:
         """
@@ -479,16 +559,95 @@ class Py2SQL:
 
     def __get_object_bound_columns(self, table_name) -> str:
         """
+        Retrieve comma separated list of object bound column names as string
 
         :param table_name: name of the table to get columns bound to object instances from
         :rtype: str
-        :return: comma separated list of column names
+        :return: comma separated list of object bound column names
         """
-        columns = ', '.join([column_name for _, column_name, _ in self.db_table_structure(table_name)
-                             if column_name.startswith(PY2SQL_OBJECT_ATTR_PREFIX) or
-                             column_name == PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME or
-                             column_name == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME])
+        columns = ', '.join([column_name for _, column_name, _ in self.db_table_structure(table_name) if
+                             Py2SQL.__is_object_bound_column(column_name)])
         return columns
+
+    @staticmethod
+    def __is_object_bound_column(column_name):
+        """
+        Check if column is object bound attribute or method
+
+        :param column_name: column name to be checked
+        :return: True if column is object bound, False otherwise
+        """
+        return column_name.startswith(PY2SQL_OBJECT_ATTR_PREFIX) or \
+            column_name.startswith(PY2SQL_OBJECT_METHOD_PREFIX) or \
+            column_name == PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME or \
+            column_name == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME
+
+    @staticmethod
+    def __get_columns_to_be_modified(old_columns, new_columns):
+        """
+        Retrieve columns to be deleted from the table during update, as well as columns to be added
+
+        :param old_columns: columns that were stored in the table prior to the class update call
+        :param new_columns: class columns to be added through class update call
+        :return: two-element tuple: column names to be deleted, column names to be added
+        """
+        old_columns = [col for col in old_columns if not Py2SQL.__is_object_bound_column(col)
+                       or col == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME]
+        to_be_deleted = set(old_columns) - set(new_columns)
+        to_be_added = set(new_columns) - set(old_columns)
+
+        return to_be_deleted, to_be_added
+
+    def __get_class_bound_columns_queries(self, cls, columns=None):
+        """
+        Retrieve list of class bound column queries
+
+        :param cls: class to retrieve column queries for
+        :param columns: columns list which optionally extends class bound columns list
+        :return: list of class bound column queries
+        """
+        data_fields = Py2SQL.__get_data_fields(cls)
+
+        base_ref_columns = ['{} REFERENCES {}(ID) DEFAULT {}'.format(
+            Py2SQL.__get_base_class_table_reference_name(b),
+            Py2SQL.__get_class_table_name(b),
+            PY2SQL_DEFAULT_CLASS_BOUND_ROW_ID
+        ) for b in cls.__bases__ if b != object and (columns is None or
+                                                     Py2SQL.__get_base_class_table_reference_name(b) in columns)]
+
+        class_bound_columns = ['{} TEXT DEFAULT \'{}\''.format(
+            Py2SQL.__get_class_column_name(k, v),
+            self.__get_sqlite_repr(v)
+        ) for k, v in data_fields if not type(v) == cls  # prevent undesired recursion
+            and (columns is None or Py2SQL.__get_class_column_name(k, v) in columns)]
+
+        if not columns:
+            columns = []
+        object_bound_columns = ['{} TEXT'.format(c) for c in columns if Py2SQL.__is_object_bound_column(c) and not
+                                c == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME]
+
+        return base_ref_columns + class_bound_columns + object_bound_columns
+
+    @staticmethod
+    def __get_class_bound_columns(cls) -> list:
+        """
+        Retrieve list of class bound column names
+
+        :param cls: class to retrieve column names for
+        :return: list of class bound column names
+        """
+        data_fields = Py2SQL.__get_data_fields(cls)
+        base_ref_columns = [Py2SQL.__get_base_class_table_reference_name(
+            b) for b in cls.__bases__ if b != object]
+        # prevent undesired recursion
+        attr_columns = [Py2SQL.__get_class_column_name(
+            k, v) for k, v in data_fields if not type(v) == cls]
+
+        return [PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME] + base_ref_columns + attr_columns
+
+    def __get_columns(self, table_name):
+        return [column_name for _, column_name, _ in self.db_table_structure(table_name)
+                if not column_name == PY2SQL_COLUMN_ID_NAME]
 
     def __update_table(self, cls):
         """
@@ -498,22 +657,32 @@ class Py2SQL:
         :return: None
         """
         table_name = Py2SQL.__get_class_table_name(cls)
-        columns = self.__get_object_bound_columns(table_name)
+        old_columns = self.__get_columns(table_name)
+        new_columns = self.__get_class_bound_columns(cls)
+        to_be_deleted, to_be_added = Py2SQL.__get_columns_to_be_modified(
+            old_columns, new_columns)
 
-        self.cursor.execute('ALTER TABLE {} RENAME TO {}$backup;'.format(table_name, table_name))
-        self.__create_table(cls)
-        self.cursor.execute('INSERT INTO {}({}) SELECT {} FROM {}$backup WHERE {} <> {};'.format(
-            table_name,
-            columns,
-            columns,
-            table_name,
-            PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME,
-            PY2SQL_DEFAULT_CLASS_BOUND_ROW_ID
-        ))
+        if not to_be_deleted and not to_be_added:
+            return
+
+        columns = (set(old_columns) - set(to_be_deleted)) | set(to_be_added)
+
+        self.cursor.execute(
+            'ALTER TABLE {} RENAME TO {}$backup;'.format(table_name, table_name))
+        self.__create_table(cls, columns)
+
+        columns_query = ', '.join(columns - set(to_be_added))
+        query = 'INSERT INTO {}({}) SELECT {} FROM {}$backup WHERE {} <> ?;'.format(
+            table_name, columns_query, columns_query, table_name, PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME)
+        # print(query)
+        self.cursor.execute(
+            query, (PY2SQL_DEFAULT_CLASS_BOUND_ROW_ID,)
+        )
 
         self.cursor.execute('DROP TABLE {}$backup;'.format(table_name))
+        self.connection.commit()
 
-    def __create_table(self, cls) -> str:
+    def __create_table(self, cls, columns=None) -> str:
         """
         Create SQLite table representation for given class instance
 
@@ -530,22 +699,10 @@ class Py2SQL:
                     )
 
         if self.__is_primitive_type(cls):
-            query = query_start + ', {} TEXT)'.format(PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME)
+            query = query_start + \
+                ', {} TEXT)'.format(PY2SQL_PRIMITIVE_TYPES_VALUE_COLUMN_NAME)
         else:
-            data_fields = Py2SQL.__get_data_fields(cls)
-
-            base_ref_columns = ['{} REFERENCES {}(ID) DEFAULT {}'.format(
-                Py2SQL.__get_base_class_table_reference_name(b),
-                Py2SQL.__get_class_table_name(b),
-                PY2SQL_DEFAULT_CLASS_BOUND_ROW_ID
-            ) for b in cls.__bases__ if b != object]
-
-            attr_columns = ['{} TEXT DEFAULT \'{}\''.format(
-                Py2SQL.__get_class_column_name(k, v),
-                self.__get_sqlite_repr(v)
-            ) for k, v in data_fields]
-
-            columns = base_ref_columns + attr_columns
+            columns = self.__get_class_bound_columns_queries(cls, columns)
 
             columns_query = ', '.join(columns)
             if columns_query:
@@ -558,7 +715,10 @@ class Py2SQL:
 
         if not self.__is_primitive_type(cls):
             if self.__table_is_empty(table_name):
-                self.cursor.execute('INSERT INTO {} DEFAULT VALUES'.format(table_name))
+                self.cursor.execute(
+                    'INSERT INTO {} DEFAULT VALUES'.format(table_name))
+
+        self.connection.commit()
 
         return table_name
 
@@ -605,12 +765,13 @@ class Py2SQL:
         """
         table_name = Py2SQL.__get_object_table_name(obj)
         self.cursor.execute(
-            'DELETE FROM {} WHERE {} = ?;'.format(table_name, PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME), (id(obj),)
+            'DELETE FROM {} WHERE {} = ?;'.format(
+                table_name, PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME), (id(obj),)
         )
 
         if not Py2SQL.__is_of_primitive_type(obj):  # object
             for value in obj.__dict__.values():
-                if not Py2SQL.__is_of_primitive_type(value):
+                if not Py2SQL.__is_of_primitive_type(value) and isclass(value):
                     self.delete_object(value)  # cascade delete
 
         self.connection.commit()
@@ -654,8 +815,10 @@ class Py2SQL:
         :param my_id: value to be returned after id() call
         :return: my_id
         """
+
         def id(ob):
             return my_id
+
         globals()['id'] = id
 
     def __reset_id_function(self) -> None:
@@ -682,7 +845,8 @@ class Py2SQL:
         Use carefully. Reflection used.
         """
         global PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME
-        PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME = getattr(sys.modules['util'], 'PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME')
+        PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME = getattr(
+            sys.modules['util'], 'PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME')
 
     def save_object_with_update(self, obj):
         """
@@ -702,12 +866,13 @@ class Py2SQL:
             w = ModelPy2SQL(obj, new_id)
         else:
             tbl_nm = Py2SQL.__get_object_table_name(obj.obj)
-            q = "SELECT * FROM {} WHERE {}={}"\
+            q = "SELECT * FROM {} WHERE {}={}" \
                 .format(tbl_nm, PY2SQL_COLUMN_ID_NAME, obj.get_id())
             self.cursor.execute(q)
             rows = self.cursor.fetchall()
             if len(rows) == 0:
-                mes = "No " + str(obj.obj.__class__.__name__) + " instance objects in " + tbl_nm + " with id: " + str(obj.get_id())
+                mes = "No " + str(obj.obj.__class__.__name__) + " instance objects in " + tbl_nm + " with id: " + str(
+                    obj.get_id())
                 raise Exception(mes)
 
             self.__redefine_id_function(obj.get_id())
@@ -741,8 +906,10 @@ class Py2SQL:
         :return: table name, id
         :rtype: tuple
         """
-        tbl_name = association_ref_value[association_ref_value.find(PY2SQL_SEPARATOR) + 1: association_ref_value.rfind(PY2SQL_SEPARATOR)]
-        id_ = int(association_ref_value[association_ref_value.rfind(PY2SQL_SEPARATOR) + 1:])
+        tbl_name = association_ref_value[
+            association_ref_value.find(PY2SQL_SEPARATOR) + 1: association_ref_value.rfind(PY2SQL_SEPARATOR)]
+        id_ = int(
+            association_ref_value[association_ref_value.rfind(PY2SQL_SEPARATOR) + 1:])
         return tbl_name, id_
 
     def get_object_by_id(self, table_name: str, id_: int, parent_obj=None) -> tuple:
@@ -759,7 +926,8 @@ class Py2SQL:
             cls_o = Py2SQL.__get_class_object_by_table_name(table_name)
             obj = cls_o.__new__(cls_o)
             cols_names = self.__get_columns_names(table_name)
-            q = "SELECT * FROM {} WHERE {}={}".format(table_name, PY2SQL_COLUMN_ID_NAME, id_)
+            q = "SELECT * FROM {} WHERE {}={}".format(
+                table_name, PY2SQL_COLUMN_ID_NAME, id_)
             self.cursor.execute(q)
             row = self.cursor.fetchone()
 
@@ -780,18 +948,23 @@ class Py2SQL:
                     elif cols_names[i] == PY2SQL_OBJECT_PYTHON_ID_COLUMN_NAME:
                         py_id = row[i]
                     elif cols_names[i].startswith(PY2SQL_BASE_CLASS_REFERENCE_PREFIX):
-                        ref_tbl_name = cols_names[i][cols_names[i].rfind(PY2SQL_SEPARATOR) + 1:]
+                        ref_tbl_name = cols_names[i][cols_names[i].rfind(
+                            PY2SQL_SEPARATOR) + 1:]
                         ref_id = int(row[i])
                         self.get_object_by_id(ref_tbl_name, ref_id, obj)
                     elif cols_names[i].startswith(PY2SQL_OBJECT_ATTR_PREFIX):
-                        attr_real_name = cols_names[cols_names.rfind(PY2SQL_SEPARATOR) + 1:]
+                        attr_real_name = cols_names[cols_names.rfind(
+                            PY2SQL_SEPARATOR) + 1:]
                         if row[i].startswith(PY2SQL_ASSOCIATION_REFERENCE_PREFIX):
-                            tbl_nm, prm_id = Py2SQL.__get_tbl_nm_and_id_assoc(row[i])
+                            tbl_nm, prm_id = Py2SQL.__get_tbl_nm_and_id_assoc(
+                                row[i])
                             if attr_real_name.startswith("__"):
                                 attr_mdf = "_" + cls_o.__name__ + attr_real_name
-                                setattr(obj, attr_mdf, self.get_object_by_id(tbl_nm, prm_id)[0])
+                                setattr(obj, attr_mdf, self.get_object_by_id(
+                                    tbl_nm, prm_id)[0])
                             else:
-                                setattr(obj, attr_real_name, self.get_object_by_id(tbl_nm, prm_id)[0])
+                                setattr(obj, attr_real_name, self.get_object_by_id(
+                                    tbl_nm, prm_id)[0])
                         else:
                             if attr_real_name.startswith("__"):
                                 attr_mdf = "_" + cls_o.__name__ + attr_real_name
