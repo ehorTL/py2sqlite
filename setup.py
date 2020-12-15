@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setuptools.setup(
     name='py2sqlite-ehortl',
     packages=['py2sqlite'],
-    version='0.0.3',
+    version='0.0.4',
     license='mit',
     description='Package to work with SQLite',
     author='Yaroslav Haidai, Yehor Polishchuk',

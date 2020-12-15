@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, date
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Sequential, Model
 
-from demo_classes import *
-from py2sql import Py2SQL
+from .demo_classes import *
+from .py2sql import Py2SQL
 
 
 def save_delete_demo(py2sql, cls, obj1, obj2, obj3, alter_func=lambda x: x):
@@ -30,7 +30,8 @@ def sample_class_demo(py2sql):
     sc2 = SampleClass(12)
     py2sql.save_object(sc1)
     SampleClass.new_attr = 123
-    sc1.new_attr = 'ASSOCIATION_REF$demo_classes_AssociatedClass$2'  # naming collision will never occur!
+    # naming collision will never occur!
+    sc1.new_attr = 'ASSOCIATION_REF$demo_classes_AssociatedClass$2'
     py2sql.save_object(sc1)
     delattr(SampleClass, 'new_attr')
     py2sql.save_class(SampleClass)
@@ -49,8 +50,10 @@ def db_info_demo(py2sql, table_name):
     print('Name:', py2sql.db_name())
     print('Size in Mb:', py2sql.db_size())
     print('Tables:', py2sql.db_tables())
-    print('{} table structure:'.format(table_name), py2sql.db_table_structure(table_name))
-    print('{} table size:'.format(table_name), py2sql.db_table_size(table_name))
+    print('{} table structure:'.format(table_name),
+          py2sql.db_table_structure(table_name))
+    print('{} table size:'.format(table_name),
+          py2sql.db_table_size(table_name))
 
 
 def demo(clear_db=True):
@@ -66,19 +69,23 @@ def demo(clear_db=True):
 
     save_delete_demo(py2sql, int, 1, 1203984, -49435320)
     save_delete_demo(py2sql, float, 2.0415, 213.32098, -4538.344)
-    save_delete_demo(py2sql, str, 'some str', 'some other str', 'yet another str', lambda x: x.upper())
+    save_delete_demo(py2sql, str, 'some str', 'some other str',
+                     'yet another str', lambda x: x.upper())
     save_delete_demo(py2sql,
                      list,
-                     [1, 'some str inside list', {'some key': (22, 33, {44, 55})}],
+                     [1, 'some str inside list', {
+                         'some key': (22, 33, {44, 55})}],
                      ['to be deleted', {'some key': (22, 33, {44, 55})}],
                      [frozenset(array('i', [100, 200, 300]))],
                      lambda x: x.append('last element')
                      )
     save_delete_demo(py2sql,
                      tuple,
-                     (1, 'some str inside tuple', [array('I', [12, 34, 56]), {78, 90}]),
+                     (1, 'some str inside tuple', [
+                      array('I', [12, 34, 56]), {78, 90}]),
                      ('to be deleted', [array('I', [12, 34, 56]), {78, 90}]),
-                     ((frozenset([123, 'fs str']), 34), [111.23, 'list str', 3345])
+                     ((frozenset([123, 'fs str']), 34),
+                      [111.23, 'list str', 3345])
                      )
 
     d1 = Dense(units=128, activation='relu')
