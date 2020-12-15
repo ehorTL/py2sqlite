@@ -1,2 +1,2 @@
-from . import py2sql
-from util import ModelPy2SQL
+from .py2sql import *
+from .util import *
